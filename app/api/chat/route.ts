@@ -30,23 +30,31 @@ async function askXai(msgs: Msg[]) {
   return d?.choices?.[0]?.message?.content as string | undefined;
 }
 
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+
 async function askGemini(msgs: Msg[]) {
-  const model = process.env.GEMINI_MODEL || "gemini-2.5-flash";
-  const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
-    method: "POST",
-    headers: { "content-type": "application/json", "x-goog-api-key": process.env.GEMINI_API_KEY || "" },
-    body: JSON.stringify({
-      systemInstruction: { parts: [{ text: SYSTEM }] },
-      contents: msgs.map(m => ({ role: m.role === "user" ? "user" : "model", parts: [{ text: m.content }] })),
-      generationConfig: { temperature: 0, maxOutputTokens: 400 },
-    }),
-  });
-  const d = await r.json();
-  if (!r.ok) {
-    console.error("Gemini API error:", d);
-    throw new Error(d?.error?.message || "Gemini API request failed");
+  const models = [process.env.GEMINI_MODEL || "gemini-2.5-flash", "gemini-2.5-flash-lite"];
+  for (const model of models) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-goog-api-key": process.env.GEMINI_API_KEY || "" },
+        body: JSON.stringify({
+          systemInstruction: { parts: [{ text: SYSTEM }] },
+          contents: msgs.map(m => ({ role: m.role === "user" ? "user" : "model", parts: [{ text: m.content }] })),
+          generationConfig: { temperature: 0, maxOutputTokens: 400 },
+        }),
+      });
+      const d = await r.json();
+      if (r.ok) {
+        const t = d?.candidates?.[0]?.content?.parts?.map((x: { text?: string }) => x.text ?? "").join("");
+        if (t) return t;
+      }
+      if (r.status !== 503 && r.status !== 429) break; 
+      await sleep(800);
+    }
   }
-  return d?.candidates?.[0]?.content?.parts?.map((x: { text?: string }) => x.text ?? "").join("") as string | undefined;
+  return undefined;
 }
 
 async function askClaude(msgs: Msg[]) {
@@ -67,7 +75,9 @@ export async function POST(req: Request) {
   if (!hasKey) return NextResponse.json({ reply: `Chatbot AI belum diaktifkan. Silakan hubungi kami via WhatsApp ${contact.phone}.` });
   try {
     const reply = provider === "gemini" ? await askGemini(msgs) : provider === "anthropic" ? await askClaude(msgs) : await askXai(msgs);
-    return NextResponse.json({ reply: reply || REFUSAL });
+    return NextResponse.json({
+      reply: reply || `Maaf, layanan AI sedang sibuk. Silakan coba lagi sebentar lagi atau hubungi kami via WhatsApp ${contact.phone}.`,
+    });
   } catch {
     return NextResponse.json({ reply: "Maaf, terjadi kendala. Silakan hubungi kami via WhatsApp." });
   }
